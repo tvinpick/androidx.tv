@@ -8,6 +8,7 @@ import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.Rect
 import android.net.Uri
+import android.os.storage.StorageManager
 import android.provider.MediaStore
 import android.util.LruCache
 import android.util.Size
@@ -80,27 +81,58 @@ object Images {
 
     // --- Картинки из памяти ТВ и USB ---
 
-    /** Картинки со всех внешних томов (встроенная память, USB). Вызывать не в главном потоке. */
+    /**
+     * Картинки со всех внешних томов (встроенная память, USB). Вызывать не в главном потоке.
+     * Сначала индекс MediaStore, затем прямой обход томов — на случай, если флешка
+     * ещё не проиндексирована.
+     */
     fun listImages(context: Context): List<Uri> {
         val result = ArrayList<Uri>()
+        val knownPaths = HashSet<String>()
         val volumes = runCatching { MediaStore.getExternalVolumeNames(context) }.getOrDefault(emptySet())
         for (volume in volumes) {
             val collection = MediaStore.Images.Media.getContentUri(volume)
             runCatching {
+                @Suppress("DEPRECATION")
                 context.contentResolver.query(
                     collection,
-                    arrayOf(MediaStore.Images.Media._ID),
+                    arrayOf(MediaStore.Images.Media._ID, MediaStore.Images.Media.DATA),
                     null, null,
                     "${MediaStore.Images.Media.DATE_MODIFIED} DESC",
                 )?.use { c ->
                     val idCol = c.getColumnIndexOrThrow(MediaStore.Images.Media._ID)
+                    val dataCol = c.getColumnIndex(MediaStore.Images.Media.DATA)
                     while (c.moveToNext()) {
                         result += ContentUris.withAppendedId(collection, c.getLong(idCol))
+                        if (dataCol >= 0) c.getString(dataCol)?.let { knownPaths += it }
                     }
                 }
             }
         }
+        val sm = context.getSystemService(StorageManager::class.java)
+        val roots = runCatching { sm.storageVolumes.mapNotNull { it.directory } }.getOrDefault(emptyList())
+        val found = ArrayList<File>()
+        for (root in roots) scanDir(root, 0, found)
+        found.sortByDescending { it.lastModified() }
+        for (file in found) if (file.path !in knownPaths) result += Uri.fromFile(file)
         return result
+    }
+
+    private val imageExt = setOf("jpg", "jpeg", "png", "webp", "bmp")
+
+    private fun scanDir(dir: File, depth: Int, out: MutableList<File>) {
+        if (depth > 5 || out.size >= 1000) return
+        val children = runCatching { dir.listFiles() }.getOrNull() ?: return
+        for (f in children) {
+            if (f.name.startsWith(".")) continue
+            if (f.isDirectory) {
+                if (depth == 0 && f.name == "Android") continue
+                scanDir(f, depth + 1, out)
+            } else if (f.extension.lowercase() in imageExt) {
+                out += f
+                if (out.size >= 1000) return
+            }
+        }
     }
 
     private val thumbs = object : LruCache<Uri, ImageBitmap>(6 * 1024 * 1024) {
@@ -112,10 +144,20 @@ object Images {
     fun thumb(context: Context, uri: Uri): ImageBitmap? {
         thumbs.get(uri)?.let { return it }
         val bmp = runCatching {
-            context.contentResolver.loadThumbnail(uri, Size(256, 144), null).asImageBitmap()
+            if (uri.scheme == "file") decodeSampled(uri.path!!, 256, 144)!!.asImageBitmap()
+            else context.contentResolver.loadThumbnail(uri, Size(256, 144), null).asImageBitmap()
         }.getOrNull() ?: return null
         thumbs.put(uri, bmp)
         return bmp
+    }
+
+    private fun decodeSampled(path: String, w: Int, h: Int): Bitmap? {
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeFile(path, bounds)
+        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+        var sample = 1
+        while (bounds.outWidth / (sample * 2) >= w && bounds.outHeight / (sample * 2) >= h) sample *= 2
+        return BitmapFactory.decodeFile(path, BitmapFactory.Options().apply { inSampleSize = sample })
     }
 
     fun trimThumbs() = thumbs.evictAll()

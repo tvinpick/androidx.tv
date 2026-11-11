@@ -25,6 +25,7 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
@@ -66,8 +67,14 @@ fun ShellScreen(state: HomeState) {
     val requestPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
         granted = it
     }
-    val images by produceState(emptyList<Uri>(), granted) {
-        if (granted) value = withContext(Dispatchers.IO) { Images.listImages(context) }
+    var reload by remember { mutableIntStateOf(0) }
+    var scanning by remember { mutableStateOf(false) }
+    val images by produceState(emptyList<Uri>(), granted, reload) {
+        if (granted) {
+            scanning = true
+            value = withContext(Dispatchers.IO) { Images.listImages(context) }
+            scanning = false
+        }
     }
     var busy by remember { mutableStateOf(false) }
 
@@ -140,6 +147,10 @@ fun ShellScreen(state: HomeState) {
                     Images.deleteBackground(context)
                     state.update { it.copy(backgroundVersion = 0) }
                 }) { Text("Сбросить фон") }
+                if (granted) {
+                    Spacer(Modifier.width(12.dp))
+                    Button(onClick = { reload++ }) { Text("Обновить список") }
+                }
                 if (busy) {
                     Spacer(Modifier.width(16.dp))
                     Text("Загрузка…", color = Color.White)
@@ -155,7 +166,10 @@ fun ShellScreen(state: HomeState) {
             }
         } else if (images.isEmpty()) {
             item(span = full) {
-                Text("Картинки в памяти ТВ и на USB не найдены", color = Color.White.copy(alpha = 0.7f))
+                Text(
+                    if (scanning) "Поиск картинок…" else "Картинки в памяти ТВ и на USB не найдены",
+                    color = Color.White.copy(alpha = 0.7f),
+                )
             }
         }
 

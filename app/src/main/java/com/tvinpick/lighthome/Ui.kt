@@ -41,6 +41,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.layout.ContentScale
@@ -292,9 +297,18 @@ fun AppTile(
 @Composable
 fun MenuDialog(title: String, items: List<Pair<String, () -> Unit>>, onDismiss: () -> Unit) {
     val first = remember { FocusRequester() }
+    // Меню часто открывается долгим нажатием OK: отпускание этой же кнопки
+    // не должно нажимать первый пункт. Принимаем OK только после нажатия внутри меню.
+    var armed by remember { mutableStateOf(false) }
     Dialog(onDismissRequest = onDismiss) {
         Column(
             Modifier
+                .onPreviewKeyEvent { e ->
+                    val ok = e.key == Key.DirectionCenter || e.key == Key.Enter || e.key == Key.NumPadEnter
+                    if (!ok) return@onPreviewKeyEvent false
+                    if (e.type == KeyEventType.KeyDown && e.nativeKeyEvent.repeatCount == 0) armed = true
+                    !armed
+                }
                 .width(420.dp)
                 .background(Color(0xFF1C2230), RoundedCornerShape(14.dp))
                 .padding(20.dp),
