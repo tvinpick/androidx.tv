@@ -92,7 +92,7 @@ fun BackgroundScreen(state: HomeState) {
         if (status != null) return
         status = if (item.isVideo) "Копирую видео…" else "Обработка картинки…"
         scope.launch {
-            val ok = withContext(Dispatchers.IO) {
+            val ok = withContext(Images.decodeDispatcher) {
                 runCatching {
                     if (item.isVideo) Images.saveVideo(context, item.uri) else Images.saveBackground(context, item.uri)
                 }.getOrDefault(false)
@@ -154,7 +154,7 @@ fun BackgroundScreen(state: HomeState) {
 private fun MediaThumb(item: MediaItem, onClick: () -> Unit) {
     val context = LocalContext.current
     val bitmap by produceState(Images.cachedThumb(item.uri), item.uri) {
-        if (value == null) value = withContext(Dispatchers.IO) { Images.thumb(context, item) }
+        if (value == null) value = withContext(Images.decodeDispatcher) { Images.thumb(context, item) }
     }
     val date = remember(item.date) { SimpleDateFormat("d MMM, HH:mm", Locale.forLanguageTag("ru")).format(item.date) }
     Column {

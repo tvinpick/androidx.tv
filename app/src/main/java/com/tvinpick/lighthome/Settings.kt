@@ -72,6 +72,23 @@ object SettingsStore {
         }
     }
 
+    @Volatile
+    private var freshStamp = -1L
+
+    @Volatile
+    private var freshValue: ShellSettings? = null
+
+    /** Для службы в отдельном процессе: перечитывает файл, только если он изменился. */
+    fun fresh(context: Context): ShellSettings {
+        val file = File(context.filesDir, FILE)
+        val stamp = file.lastModified()
+        freshValue?.let { if (stamp == freshStamp) return it }
+        val loaded = runCatching { decode(file.readText()) }.getOrNull() ?: ShellSettings()
+        freshStamp = stamp
+        freshValue = loaded
+        return loaded
+    }
+
     fun save(context: Context, settings: ShellSettings) {
         synchronized(this) {
             cached = settings

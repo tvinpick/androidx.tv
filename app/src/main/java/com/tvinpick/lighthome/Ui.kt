@@ -160,7 +160,7 @@ private fun Slideshow(uris: List<String>, minutes: Int, playing: Boolean) {
         while (true) {
             val i = index % uris.size
             if (shown?.first != i) {
-                val bmp = withContext(Dispatchers.IO) {
+                val bmp = withContext(Images.decodeDispatcher) {
                     runCatching { Images.decodeForScreen(context, Uri.parse(uris[i])) }.getOrNull()
                 }
                 if (bmp != null) shown = i to bmp.asImageBitmap()
@@ -224,10 +224,8 @@ fun HomeScreen(state: HomeState) {
                 SmallButton("Wi-Fi") { openSettings(context, Settings.ACTION_WIFI_SETTINGS) }
                 SmallButton("Звук") { openSettings(context, Settings.ACTION_SOUND_SETTINGS) }
                 SmallButton("Выключить экран") {
-                    val service = HomeKeyService.instance
-                    if (service == null || !service.sleep()) {
-                        toast(context, "Нужна включённая служба «Лёгкий дом» в спец. возможностях")
-                    }
+                    if (state.serviceEnabled) HomeKeyService.requestSleep(context)
+                    else toast(context, "Нужна включённая служба «Лёгкий дом» в спец. возможностях")
                 }
             }
             Spacer(Modifier.height(12.dp))

@@ -4,6 +4,7 @@ import android.content.ContentUris
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.ImageDecoder
 import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.Rect
@@ -48,24 +49,47 @@ object Images {
         return bmp
     }
 
+    /** Ограниченный пул для декодирования: на слабом ТВ не больше двух картинок одновременно. */
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    val decodeDispatcher = kotlinx.coroutines.Dispatchers.IO.limitedParallelism(2)
+
+    /**
+     * Декодирует картинку сразу в уменьшенном виде (ImageDecoder с целевым размером):
+     * даже 8K-фото не загружается в память целиком. Поддерживает JPEG, PNG, WEBP, HEIF.
+     * cover = true — минимальная сторона не меньше заданной (для обрезки), иначе вписать.
+     */
+    fun decodeScaled(context: Context, uri: Uri, w: Int, h: Int, cover: Boolean): Bitmap? = try {
+        val source = ImageDecoder.createSource(context.contentResolver, uri)
+        ImageDecoder.decodeBitmap(source) { decoder, info, _ ->
+            val sw = info.size.width
+            val sh = info.size.height
+            if (sw > 0 && sh > 0) {
+                val k = if (cover) maxOf(w.toFloat() / sw, h.toFloat() / sh)
+                else minOf(w.toFloat() / sw, h.toFloat() / sh)
+                if (k < 1f) {
+                    decoder.setTargetSize(
+                        (sw * k).toInt().coerceAtLeast(1),
+                        (sh * k).toInt().coerceAtLeast(1),
+                    )
+                }
+            }
+            decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
+            decoder.memorySizePolicy = ImageDecoder.MEMORY_POLICY_LOW_RAM
+        }
+    } catch (t: Throwable) {
+        null
+    }
+
     /** Картинка, уменьшенная и обрезанная по центру под размер экрана. */
     fun decodeForScreen(context: Context, uri: Uri): Bitmap? {
         val dm = context.resources.displayMetrics
         val screenW = maxOf(dm.widthPixels, dm.heightPixels)
         val screenH = minOf(dm.widthPixels, dm.heightPixels)
-        val cr = context.contentResolver
-        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-        cr.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, bounds) } ?: return null
-        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
-        var sample = 1
-        while (bounds.outWidth / (sample * 2) >= screenW && bounds.outHeight / (sample * 2) >= screenH) {
-            sample *= 2
-        }
-        val opts = BitmapFactory.Options().apply { inSampleSize = sample }
-        val src = cr.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, opts) } ?: return null
+        val src = decodeScaled(context, uri, screenW, screenH, cover = true) ?: return null
+        if (src.width == screenW && src.height == screenH) return src
         val k = maxOf(screenW.toFloat() / src.width, screenH.toFloat() / src.height)
-        val cropW = (screenW / k).toInt().coerceAtMost(src.width)
-        val cropH = (screenH / k).toInt().coerceAtMost(src.height)
+        val cropW = (screenW / k).toInt().coerceIn(1, src.width)
+        val cropH = (screenH / k).toInt().coerceIn(1, src.height)
         val left = (src.width - cropW) / 2
         val top = (src.height - cropH) / 2
         val out = Bitmap.createBitmap(screenW, screenH, Bitmap.Config.ARGB_8888)
@@ -207,22 +231,13 @@ object Images {
             if (item.uri.scheme == "file") {
                 val file = File(item.uri.path!!)
                 if (item.isVideo) ThumbnailUtils.createVideoThumbnail(file, size, null)
-                else decodeSampled(file.path, size.width, size.height)
+                else decodeScaled(context, item.uri, size.width, size.height, cover = true)
             } else {
                 context.contentResolver.loadThumbnail(item.uri, size, null)
             }
         }.getOrNull()?.asImageBitmap() ?: return null
         thumbs.put(item.uri, bmp)
         return bmp
-    }
-
-    private fun decodeSampled(path: String, w: Int, h: Int): Bitmap? {
-        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-        BitmapFactory.decodeFile(path, bounds)
-        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
-        var sample = 1
-        while (bounds.outWidth / (sample * 2) >= w && bounds.outHeight / (sample * 2) >= h) sample *= 2
-        return BitmapFactory.decodeFile(path, BitmapFactory.Options().apply { inSampleSize = sample })
     }
 
     fun trimThumbs() = thumbs.evictAll()
