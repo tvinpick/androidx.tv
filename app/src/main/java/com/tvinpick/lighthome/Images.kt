@@ -7,6 +7,7 @@ import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.Rect
+import android.media.ThumbnailUtils
 import android.net.Uri
 import android.os.storage.StorageManager
 import android.provider.MediaStore
@@ -16,8 +17,18 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import java.io.File
 
+/** Картинка или видео из памяти ТВ / USB. */
+data class MediaItem(
+    val uri: Uri,
+    val name: String,
+    val folder: String,
+    val isVideo: Boolean,
+    /** Время добавления, мс. */
+    val date: Long,
+)
+
 object Images {
-    // --- Фон ---
+    // --- Фон-картинка ---
 
     private var bgVersion = 0L
     private var bgBitmap: ImageBitmap? = null
@@ -37,22 +48,21 @@ object Images {
         return bmp
     }
 
-    /** Уменьшает выбранную картинку до размера экрана и сохраняет в filesDir. */
-    fun saveBackground(context: Context, uri: Uri): Boolean {
+    /** Картинка, уменьшенная и обрезанная по центру под размер экрана. */
+    fun decodeForScreen(context: Context, uri: Uri): Bitmap? {
         val dm = context.resources.displayMetrics
         val screenW = maxOf(dm.widthPixels, dm.heightPixels)
         val screenH = minOf(dm.widthPixels, dm.heightPixels)
         val cr = context.contentResolver
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-        cr.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, bounds) } ?: return false
-        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return false
+        cr.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, bounds) } ?: return null
+        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
         var sample = 1
         while (bounds.outWidth / (sample * 2) >= screenW && bounds.outHeight / (sample * 2) >= screenH) {
             sample *= 2
         }
         val opts = BitmapFactory.Options().apply { inSampleSize = sample }
-        val src = cr.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, opts) } ?: return false
-        // Обрезка по центру под пропорции экрана.
+        val src = cr.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, opts) } ?: return null
         val k = maxOf(screenW.toFloat() / src.width, screenH.toFloat() / src.height)
         val cropW = (screenW / k).toInt().coerceAtMost(src.width)
         val cropH = (screenH / k).toInt().coerceAtMost(src.height)
@@ -64,6 +74,12 @@ object Images {
             Paint(Paint.FILTER_BITMAP_FLAG),
         )
         src.recycle()
+        return out
+    }
+
+    /** Уменьшает выбранную картинку до размера экрана и сохраняет в filesDir. */
+    fun saveBackground(context: Context, uri: Uri): Boolean {
+        val out = decodeForScreen(context, uri) ?: return false
         val file = SettingsStore.backgroundFile(context)
         val tmp = File(file.path + ".tmp")
         tmp.outputStream().use { out.compress(Bitmap.CompressFormat.JPEG, 90, it) }
@@ -71,66 +87,109 @@ object Images {
         return tmp.renameTo(file)
     }
 
+    /** Копирует видео в filesDir, чтобы фон не пропал при извлечении флешки. */
+    fun saveVideo(context: Context, uri: Uri): Boolean {
+        val file = SettingsStore.videoFile(context)
+        val tmp = File(file.path + ".tmp")
+        val input = context.contentResolver.openInputStream(uri) ?: return false
+        input.use { i -> tmp.outputStream().use { o -> i.copyTo(o, 256 * 1024) } }
+        return tmp.renameTo(file)
+    }
+
     fun deleteBackground(context: Context) {
         SettingsStore.backgroundFile(context).delete()
+        SettingsStore.videoFile(context).delete()
         synchronized(this) {
             bgVersion = 0
             bgBitmap = null
         }
     }
 
-    // --- Картинки из памяти ТВ и USB ---
+    // --- Картинки и видео из памяти ТВ и USB ---
+
+    private val imageExt = setOf("jpg", "jpeg", "png", "webp", "bmp")
+    private val videoExt = setOf("mp4", "mkv", "webm", "3gp", "mov")
 
     /**
-     * Картинки со всех внешних томов (встроенная память, USB). Вызывать не в главном потоке.
+     * Картинки и видео со всех внешних томов, новые сверху. Вызывать не в главном потоке.
      * Сначала индекс MediaStore, затем прямой обход томов — на случай, если флешка
      * ещё не проиндексирована.
      */
-    fun listImages(context: Context): List<Uri> {
-        val result = ArrayList<Uri>()
+    fun listMedia(context: Context): List<MediaItem> {
+        val result = ArrayList<MediaItem>()
         val knownPaths = HashSet<String>()
         val volumes = runCatching { MediaStore.getExternalVolumeNames(context) }.getOrDefault(emptySet())
         for (volume in volumes) {
-            val collection = MediaStore.Images.Media.getContentUri(volume)
-            runCatching {
-                @Suppress("DEPRECATION")
-                context.contentResolver.query(
-                    collection,
-                    arrayOf(MediaStore.Images.Media._ID, MediaStore.Images.Media.DATA),
-                    null, null,
-                    "${MediaStore.Images.Media.DATE_MODIFIED} DESC",
-                )?.use { c ->
-                    val idCol = c.getColumnIndexOrThrow(MediaStore.Images.Media._ID)
-                    val dataCol = c.getColumnIndex(MediaStore.Images.Media.DATA)
-                    while (c.moveToNext()) {
-                        result += ContentUris.withAppendedId(collection, c.getLong(idCol))
-                        if (dataCol >= 0) c.getString(dataCol)?.let { knownPaths += it }
-                    }
-                }
-            }
+            queryCollection(context, MediaStore.Images.Media.getContentUri(volume), false, result, knownPaths)
+            queryCollection(context, MediaStore.Video.Media.getContentUri(volume), true, result, knownPaths)
         }
         val sm = context.getSystemService(StorageManager::class.java)
         val roots = runCatching { sm.storageVolumes.mapNotNull { it.directory } }.getOrDefault(emptyList())
         val found = ArrayList<File>()
         for (root in roots) scanDir(root, 0, found)
-        found.sortByDescending { it.lastModified() }
-        for (file in found) if (file.path !in knownPaths) result += Uri.fromFile(file)
+        for (f in found) {
+            if (f.path in knownPaths) continue
+            result += MediaItem(
+                uri = Uri.fromFile(f),
+                name = f.name,
+                folder = f.parentFile?.name ?: "",
+                isVideo = f.extension.lowercase() in videoExt,
+                date = f.lastModified(),
+            )
+        }
+        result.sortByDescending { it.date }
         return result
     }
 
-    private val imageExt = setOf("jpg", "jpeg", "png", "webp", "bmp")
+    @Suppress("DEPRECATION")
+    private fun queryCollection(
+        context: Context,
+        collection: Uri,
+        isVideo: Boolean,
+        out: MutableList<MediaItem>,
+        knownPaths: MutableSet<String>,
+    ) {
+        runCatching {
+            context.contentResolver.query(
+                collection,
+                arrayOf(
+                    MediaStore.MediaColumns._ID,
+                    MediaStore.MediaColumns.DATA,
+                    MediaStore.MediaColumns.DISPLAY_NAME,
+                    MediaStore.MediaColumns.BUCKET_DISPLAY_NAME,
+                    MediaStore.MediaColumns.DATE_ADDED,
+                ),
+                null, null, null,
+            )?.use { c ->
+                while (c.moveToNext()) {
+                    val path = c.getString(1)
+                    if (path != null) knownPaths += path
+                    out += MediaItem(
+                        uri = ContentUris.withAppendedId(collection, c.getLong(0)),
+                        name = c.getString(2) ?: path?.substringAfterLast('/') ?: "",
+                        folder = c.getString(3) ?: "",
+                        isVideo = isVideo,
+                        date = c.getLong(4) * 1000,
+                    )
+                }
+            }
+        }
+    }
 
     private fun scanDir(dir: File, depth: Int, out: MutableList<File>) {
-        if (depth > 5 || out.size >= 1000) return
+        if (depth > 5 || out.size >= 2000) return
         val children = runCatching { dir.listFiles() }.getOrNull() ?: return
         for (f in children) {
             if (f.name.startsWith(".")) continue
             if (f.isDirectory) {
                 if (depth == 0 && f.name == "Android") continue
                 scanDir(f, depth + 1, out)
-            } else if (f.extension.lowercase() in imageExt) {
-                out += f
-                if (out.size >= 1000) return
+            } else {
+                val ext = f.extension.lowercase()
+                if (ext in imageExt || ext in videoExt) {
+                    out += f
+                    if (out.size >= 2000) return
+                }
             }
         }
     }
@@ -141,13 +200,19 @@ object Images {
 
     fun cachedThumb(uri: Uri): ImageBitmap? = thumbs.get(uri)
 
-    fun thumb(context: Context, uri: Uri): ImageBitmap? {
-        thumbs.get(uri)?.let { return it }
+    fun thumb(context: Context, item: MediaItem): ImageBitmap? {
+        thumbs.get(item.uri)?.let { return it }
+        val size = Size(256, 144)
         val bmp = runCatching {
-            if (uri.scheme == "file") decodeSampled(uri.path!!, 256, 144)!!.asImageBitmap()
-            else context.contentResolver.loadThumbnail(uri, Size(256, 144), null).asImageBitmap()
-        }.getOrNull() ?: return null
-        thumbs.put(uri, bmp)
+            if (item.uri.scheme == "file") {
+                val file = File(item.uri.path!!)
+                if (item.isVideo) ThumbnailUtils.createVideoThumbnail(file, size, null)
+                else decodeSampled(file.path, size.width, size.height)
+            } else {
+                context.contentResolver.loadThumbnail(item.uri, size, null)
+            }
+        }.getOrNull()?.asImageBitmap() ?: return null
+        thumbs.put(item.uri, bmp)
         return bmp
     }
 

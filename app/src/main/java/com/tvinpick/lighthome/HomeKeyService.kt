@@ -32,6 +32,24 @@ class HomeKeyService : AccessibilityService() {
 
     override fun onInterrupt() = Unit
 
+    override fun onServiceConnected() {
+        super.onServiceConnected()
+        instance = this
+    }
+
+    override fun onUnbind(intent: Intent?): Boolean {
+        instance = null
+        return super.onUnbind(intent)
+    }
+
+    override fun onDestroy() {
+        instance = null
+        super.onDestroy()
+    }
+
+    /** Выключить экран (как кнопка питания). */
+    fun sleep(): Boolean = performGlobalAction(GLOBAL_ACTION_LOCK_SCREEN)
+
     private fun launchHome(force: Boolean) {
         val now = SystemClock.elapsedRealtime()
         if (!force && now - lastLaunch < 700) return
@@ -46,6 +64,10 @@ class HomeKeyService : AccessibilityService() {
 
     companion object {
         const val STOCK_LAUNCHER = "com.google.android.apps.tv.launcherx"
+
+        @Volatile
+        var instance: HomeKeyService? = null
+            private set
 
         fun isEnabled(context: Context): Boolean {
             val enabled = Settings.Secure.getString(

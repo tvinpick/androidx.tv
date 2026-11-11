@@ -34,8 +34,12 @@ class MainActivity : ComponentActivity() {
             CompositionLocalProvider(LocalDensity provides Density(base.density * scale, base.fontScale)) {
                 AppTheme {
                     Box(Modifier.fillMaxSize()) {
-                        Background(state.settings)
+                        Background(state.settings, state.resumed)
                         BackHandler {
+                            if (state.moving != null) {
+                                state.moving = null
+                                return@BackHandler
+                            }
                             if (state.screen != Screen.Home) {
                                 state.screen = Screen.Home
                                 state.focusTick++
@@ -45,6 +49,7 @@ class MainActivity : ComponentActivity() {
                             Screen.Home -> HomeScreen(state)
                             Screen.Onboarding -> OnboardingScreen(state)
                             Screen.Shell -> ShellScreen(state)
+                            Screen.Background -> BackgroundScreen(state)
                             is Screen.AllApps -> AllAppsScreen(state, s.sectionId)
                         }
                         Menus(state)
@@ -60,6 +65,7 @@ class MainActivity : ComponentActivity() {
         overridePendingTransition(0, 0)
         // Повторное нажатие Home — вернуться на главный экран.
         state.menu = null
+        state.moving = null
         if (state.screen != Screen.Onboarding) state.screen = Screen.Home
         state.focusTick++
     }

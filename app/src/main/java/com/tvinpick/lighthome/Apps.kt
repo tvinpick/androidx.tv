@@ -16,6 +16,7 @@ data class AppEntry(
     val label: String,
     val component: ComponentName,
     val leanback: Boolean,
+    val installed: Long = 0,
 )
 
 class AppImage(val bitmap: ImageBitmap, val isBanner: Boolean)
@@ -39,10 +40,23 @@ object Apps {
                     label = ri.loadLabel(pm).toString(),
                     component = ComponentName(ai.packageName, ai.name),
                     leanback = leanback,
+                    installed = runCatching { pm.getPackageInfo(ai.packageName, 0).firstInstallTime }
+                        .getOrDefault(0L),
                 )
             }
         }
         return result.values.sortedBy { it.label.lowercase() }
+    }
+
+    fun openInfo(context: Context, packageName: String) {
+        runCatching {
+            context.startActivity(
+                Intent(
+                    android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                    android.net.Uri.fromParts("package", packageName, null),
+                ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+            )
+        }
     }
 
     fun launch(context: Context, app: AppEntry) {

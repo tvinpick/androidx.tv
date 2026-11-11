@@ -11,6 +11,7 @@ sealed interface Screen {
     data object Onboarding : Screen
     data object Shell : Screen
     data class AllApps(val sectionId: Long) : Screen
+    data object Background : Screen
 }
 
 sealed interface Menu {
@@ -20,6 +21,8 @@ sealed interface Menu {
     data class SectionSize(val sectionId: Long) : Menu
     data class Rename(val sectionId: Long) : Menu
     data object Inputs : Menu
+    data object Folders : Menu
+    data class Import(val files: List<MediaItem>) : Menu
 }
 
 class HomeState(private val context: Context) {
@@ -31,12 +34,25 @@ class HomeState(private val context: Context) {
     var screen by mutableStateOf<Screen>(Screen.Home)
     var menu by mutableStateOf<Menu?>(null)
 
+    /** Картинки и видео для выбора фона (загружаются на экране «Фон»). */
+    var media by mutableStateOf<List<MediaItem>>(emptyList())
+
+    /** Плитка в режиме перемещения стрелками: раздел и пакет. */
+    var moving by mutableStateOf<Pair<Long, String>?>(null)
+
     /** Увеличивается, когда нужно вернуть фокус на первую плитку. */
     var focusTick by mutableIntStateOf(0)
 
     fun update(block: (ShellSettings) -> ShellSettings) {
         settings = block(settings)
         SettingsStore.save(context, settings)
+    }
+
+    fun replace(newSettings: ShellSettings) = update { newSettings }
+
+    fun launch(app: AppEntry) {
+        Apps.launch(context, app)
+        if (settings.lastApp != app.packageName) update { it.copy(lastApp = app.packageName) }
     }
 
     private fun updateSection(id: Long, block: (Section) -> Section) = update { s ->
