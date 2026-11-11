@@ -163,6 +163,7 @@ private fun Slideshow(uris: List<String>, minutes: Int, playing: Boolean) {
                 val bmp = withContext(Images.decodeDispatcher) {
                     runCatching { Images.decodeForScreen(context, Uri.parse(uris[i])) }.getOrNull()
                 }
+                Diag.log("слайд-шоу: кадр ${i + 1} из ${uris.size}, ${if (bmp != null) "ок" else "ошибка"}")
                 if (bmp != null) shown = i to bmp.asImageBitmap()
             }
             delay(minutes.coerceAtLeast(1) * 60_000L)

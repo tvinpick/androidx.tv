@@ -91,6 +91,7 @@ fun BackgroundScreen(state: HomeState) {
     fun apply(item: MediaItem) {
         if (status != null) return
         status = if (item.isVideo) "Копирую видео…" else "Обработка картинки…"
+        Diag.log("выбран файл ${item.name} (${if (item.isVideo) "видео" else "картинка"}, папка ${item.folder})")
         scope.launch {
             val ok = withContext(Images.decodeDispatcher) {
                 runCatching {

@@ -59,10 +59,15 @@ object Images {
      * cover = true — минимальная сторона не меньше заданной (для обрезки), иначе вписать.
      */
     fun decodeScaled(context: Context, uri: Uri, w: Int, h: Int, cover: Boolean): Bitmap? = try {
+        val start = android.os.SystemClock.elapsedRealtime()
         val source = ImageDecoder.createSource(context.contentResolver, uri)
+        val big = w > 600
         ImageDecoder.decodeBitmap(source) { decoder, info, _ ->
             val sw = info.size.width
             val sh = info.size.height
+            if (big || sw * sh > 20_000_000) {
+                Diag.log("декодирование ${uri.lastPathSegment}: ${sw}x$sh ${info.mimeType}, цель ${w}x$h")
+            }
             if (sw > 0 && sh > 0) {
                 val k = if (cover) maxOf(w.toFloat() / sw, h.toFloat() / sh)
                 else minOf(w.toFloat() / sw, h.toFloat() / sh)
@@ -75,8 +80,16 @@ object Images {
             }
             decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
             decoder.memorySizePolicy = ImageDecoder.MEMORY_POLICY_LOW_RAM
+        }.also {
+            if (big) {
+                Diag.log(
+                    "готово: ${it.width}x${it.height} за ${android.os.SystemClock.elapsedRealtime() - start} мс; " +
+                        Diag.memory(context),
+                )
+            }
         }
     } catch (t: Throwable) {
+        Diag.log("ошибка декодирования ${uri.lastPathSegment}: $t")
         null
     }
 
@@ -103,16 +116,22 @@ object Images {
 
     /** Уменьшает выбранную картинку до размера экрана и сохраняет в filesDir. */
     fun saveBackground(context: Context, uri: Uri): Boolean {
+        Diag.log("установка фона: $uri, размер файла ${fileSize(context, uri)}; ${Diag.memory(context)}")
         val out = decodeForScreen(context, uri) ?: return false
         val file = SettingsStore.backgroundFile(context)
         val tmp = File(file.path + ".tmp")
         tmp.outputStream().use { out.compress(Bitmap.CompressFormat.JPEG, 90, it) }
         out.recycle()
-        return tmp.renameTo(file)
+        return tmp.renameTo(file).also { Diag.log("фон сохранён: $it, ${file.length() / 1024} КБ") }
     }
+
+    fun fileSize(context: Context, uri: Uri): String = runCatching {
+        context.contentResolver.openFileDescriptor(uri, "r")!!.use { "${it.statSize / 1024} КБ" }
+    }.getOrDefault("?")
 
     /** Копирует видео в filesDir, чтобы фон не пропал при извлечении флешки. */
     fun saveVideo(context: Context, uri: Uri): Boolean {
+        Diag.log("копирование видео: $uri, ${fileSize(context, uri)}")
         val file = SettingsStore.videoFile(context)
         val tmp = File(file.path + ".tmp")
         val input = context.contentResolver.openInputStream(uri) ?: return false
@@ -140,6 +159,8 @@ object Images {
      * ещё не проиндексирована.
      */
     fun listMedia(context: Context): List<MediaItem> {
+        val start = android.os.SystemClock.elapsedRealtime()
+        Diag.log("поиск файлов")
         val result = ArrayList<MediaItem>()
         val knownPaths = HashSet<String>()
         val volumes = runCatching { MediaStore.getExternalVolumeNames(context) }.getOrDefault(emptySet())
@@ -162,6 +183,10 @@ object Images {
             )
         }
         result.sortByDescending { it.date }
+        Diag.log(
+            "найдено ${result.size} файлов (из индекса ${result.size - found.count { it.path !in knownPaths }}, " +
+                "напрямую ${found.size}) за ${android.os.SystemClock.elapsedRealtime() - start} мс",
+        )
         return result
     }
 
@@ -227,6 +252,7 @@ object Images {
     fun thumb(context: Context, item: MediaItem): ImageBitmap? {
         thumbs.get(item.uri)?.let { return it }
         val size = Size(256, 144)
+        Diag.log("миниатюра: ${item.name}")
         val bmp = runCatching {
             if (item.uri.scheme == "file") {
                 val file = File(item.uri.path!!)
@@ -235,7 +261,9 @@ object Images {
             } else {
                 context.contentResolver.loadThumbnail(item.uri, size, null)
             }
-        }.getOrNull()?.asImageBitmap() ?: return null
+        }.onFailure { Diag.log("ошибка миниатюры ${item.name}: $it") }
+            .getOrNull()?.asImageBitmap() ?: return null
+        Diag.log("миниатюра готова: ${item.name}")
         thumbs.put(item.uri, bmp)
         return bmp
     }

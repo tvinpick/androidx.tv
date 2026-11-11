@@ -196,6 +196,39 @@ fun ShellScreen(state: HomeState) {
                 }
             }
         }
+        // --- Диагностика ---
+        item { Header("Диагностика") }
+        item {
+            SwitchRow("Вести журнал диагностики", settings.diagnostics) { v ->
+                state.update { it.copy(diagnostics = v) }
+            }
+        }
+        item {
+            Text(
+                "Журнал записывает работу с фоном, память ТВ и сбои. Отчёт сохраняется в " +
+                    "Download/LightHome — его можно отправить на телефон через Send Files to TV.",
+                fontSize = 14.sp,
+                color = Color.White.copy(alpha = 0.7f),
+            )
+        }
+        item {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Button(onClick = {
+                    if (busy) return@Button
+                    busy = true
+                    scope.launch {
+                        val path = withContext(Dispatchers.IO) { Diag.saveReport(context) }
+                        toast(context, if (path != null) "Отчёт сохранён: $path" else "Не удалось сохранить отчёт")
+                        busy = false
+                    }
+                }) { Text("Сохранить отчёт") }
+                Spacer(Modifier.width(12.dp))
+                Button(onClick = {
+                    Diag.clear(context)
+                    toast(context, "Журнал очищен")
+                }) { Text("Очистить журнал") }
+            }
+        }
         item { Spacer(Modifier.height(24.dp)) }
     }
 }

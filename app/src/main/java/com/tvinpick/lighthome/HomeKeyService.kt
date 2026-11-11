@@ -22,7 +22,10 @@ class HomeKeyService : AccessibilityService() {
     override fun onKeyEvent(event: KeyEvent): Boolean {
         if (event.keyCode != KeyEvent.KEYCODE_HOME) return false
         if (!SettingsStore.fresh(this).interceptHome) return false
-        if (event.action == KeyEvent.ACTION_UP) launchHome(force = true)
+        if (event.action == KeyEvent.ACTION_UP) {
+            Diag.log("кнопка Home")
+            launchHome(force = true)
+        }
         return true
     }
 
@@ -37,12 +40,14 @@ class HomeKeyService : AccessibilityService() {
 
     private val sleepReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
-            performGlobalAction(GLOBAL_ACTION_LOCK_SCREEN)
+            Diag.log("выключение экрана: ${performGlobalAction(GLOBAL_ACTION_LOCK_SCREEN)}")
         }
     }
 
     override fun onServiceConnected() {
         super.onServiceConnected()
+        Diag.init(applicationContext, "service")
+        Diag.log("служба подключена")
         // Команда «Выключить экран» из оболочки (служба живёт в отдельном процессе).
         val filter = IntentFilter(ACTION_SLEEP)
         if (android.os.Build.VERSION.SDK_INT >= 33) {
@@ -53,6 +58,7 @@ class HomeKeyService : AccessibilityService() {
     }
 
     override fun onDestroy() {
+        Diag.log("служба остановлена")
         runCatching { unregisterReceiver(sleepReceiver) }
         super.onDestroy()
     }
@@ -61,6 +67,7 @@ class HomeKeyService : AccessibilityService() {
         val now = SystemClock.elapsedRealtime()
         if (!force && now - lastLaunch < 700) return
         lastLaunch = now
+        if (!force) Diag.log("стандартный лаунчер вышел на экран — возвращаю оболочку")
         val intent = Intent(this, MainActivity::class.java).addFlags(
             Intent.FLAG_ACTIVITY_NEW_TASK or
                 Intent.FLAG_ACTIVITY_CLEAR_TOP or

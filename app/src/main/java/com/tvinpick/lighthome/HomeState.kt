@@ -45,6 +45,7 @@ class HomeState(private val context: Context) {
 
     fun update(block: (ShellSettings) -> ShellSettings) {
         settings = block(settings)
+        Diag.enabled = settings.diagnostics
         SettingsStore.save(context, settings)
     }
 

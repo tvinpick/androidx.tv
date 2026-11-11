@@ -44,6 +44,8 @@ data class ShellSettings(
     val spacing: Int = 14,
     /** Защита от случайного изменения разделов. */
     val locked: Boolean = false,
+    /** Вести журнал диагностики. */
+    val diagnostics: Boolean = true,
 ) {
     val background: BgType
         get() = bgType ?: if (backgroundVersion != 0L) BgType.IMAGE else BgType.NONE
